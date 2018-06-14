@@ -1166,6 +1166,17 @@ proc processType(typeName: NimNode, obj: NimNode,
           )
       else:
         doAssert false, "Unable to process nnkSym " & $typeName
+  of nnkBracketExpr:
+    let distinctVal = $obj[1]
+    case distinctVal:
+      of "string":
+        result = quote do:
+          (
+            verifyJsonKind(`jsonNode`, {JString, JNull}, astToStr(`jsonNode`));
+            if `jsonNode`.kind == JNull: nil else: `jsonNode`.str.`typeName`
+          )    
+      else:
+        doAssert false, "Unable to process nnkBracketExpr " & $typeName        
   else:
     doAssert false, "Unable to process type: " & $obj.kind
 
@@ -1284,7 +1295,7 @@ proc createConstructor(typeSym, jsonNode: NimNode): NimNode =
 
     # Handle all other types.
     let obj = getType(typeSym)
-    if obj.kind == nnkBracketExpr:
+    if obj.kind == nnkBracketExpr and $obj[0] != "distinct":
       # When `Sym "Foo"` turns out to be a `ref object`.
       result = createConstructor(obj, jsonNode)
     else:
