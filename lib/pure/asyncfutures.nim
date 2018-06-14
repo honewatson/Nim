@@ -27,8 +27,6 @@ type
   FutureError* = object of Exception
     cause*: FutureBase
 
-{.deprecated: [PFutureBase: FutureBase, PFuture: Future].}
-
 when not defined(release):
   var currentID = 0
 
@@ -177,7 +175,7 @@ proc fail*[T](future: Future[T], error: ref Exception) =
     if getStackTrace(error) == "": getStackTrace() else: getStackTrace(error)
   future.callbacks.call()
 
-proc clearCallbacks(future: FutureBase) =
+proc clearCallbacks*(future: FutureBase) =
   future.callbacks.function = nil
   future.callbacks.next = nil
 
@@ -342,6 +340,7 @@ proc asyncCheck*[T](future: Future[T]) =
   ## finished with an error.
   ##
   ## This should be used instead of ``discard`` to discard void futures.
+  assert(not future.isNil, "Future is nil")
   future.callback =
     proc () =
       if future.failed:

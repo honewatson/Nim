@@ -29,9 +29,7 @@ when not hasThreadSupport:
   var
     colorsFGCache = initTable[Color, string]()
     colorsBGCache = initTable[Color, string]()
-  when not defined(windows):
-    var
-      styleCache = initTable[int, string]()
+    styleCache = initTable[int, string]()
 
 var
   trueColorIsSupported: bool
@@ -41,10 +39,8 @@ var
 const
   fgPrefix = "\x1b[38;2;"
   bgPrefix = "\x1b[48;2;"
-
-when not defined(windows):
-  const
-    stylePrefix = "\e["
+  ansiResetCode* = "\e[0m"
+  stylePrefix = "\e["
 
 when defined(windows):
   import winlean, os
@@ -372,7 +368,7 @@ proc cursorForward*(f: File, count=1) =
     inc(p.x, count)
     setCursorPos(h, p.x, p.y)
   else:
-    f.write("{stylePrefix}{count}C")
+    f.write(fmt"{stylePrefix}{count}C")
 
 proc cursorBackward*(f: File, count=1) =
   ## Moves the cursor backward by `count` columns.
@@ -382,7 +378,7 @@ proc cursorBackward*(f: File, count=1) =
     dec(p.x, count)
     setCursorPos(h, p.x, p.y)
   else:
-    f.write("{stylePrefix}{count}D")
+    f.write(fmt"{stylePrefix}{count}D")
 
 when true:
   discard
@@ -468,7 +464,7 @@ proc resetAttributes*(f: File) =
     else:
       discard setConsoleTextAttribute(hStdout, oldStdoutAttr)
   else:
-    f.write("\e[0m")
+    f.write(ansiResetCode)
 
 type
   Style* = enum         ## different styles for text output
@@ -487,15 +483,22 @@ when not defined(windows):
     gFG {.threadvar.}: int
     gBG {.threadvar.}: int
 
-  proc getStyleStr(style: int): string =
-    when hasThreadSupport:
-      result = fmt"{stylePrefix}{style}m"
+proc ansiStyleCode*(style: int): string =
+  when hasThreadSupport:
+    result = fmt"{stylePrefix}{style}m"
+  else:
+    if styleCache.hasKey(style):
+      result = styleCache[style]
     else:
-      if styleCache.hasKey(style):
-        result = styleCache[style]
-      else:
-        result = fmt"{stylePrefix}{style}m"
-        styleCache[style] = result
+      result = fmt"{stylePrefix}{style}m"
+      styleCache[style] = result
+
+template ansiStyleCode*(style: Style): string =
+  ansiStyleCode(style.int)
+
+# The styleCache can be skipped when `style` is known at compile-time
+template ansiStyleCode*(style: static[Style]): string =
+  (static(stylePrefix & $style.int & "m"))
 
 proc setStyle*(f: File, style: set[Style]) =
   ## Sets the terminal style.
@@ -510,7 +513,7 @@ proc setStyle*(f: File, style: set[Style]) =
     discard setConsoleTextAttribute(h, old or a)
   else:
     for s in items(style):
-      f.write(getStyleStr(ord(s)))
+      f.write(ansiStyleCode(s))
 
 proc writeStyled*(txt: string, style: set[Style] = {styleBright}) =
   ## Writes the text `txt` in a given `style` to stdout.
@@ -524,9 +527,9 @@ proc writeStyled*(txt: string, style: set[Style] = {styleBright}) =
     stdout.write(txt)
     stdout.resetAttributes()
     if gFG != 0:
-      stdout.write(getStyleStr(gFG))
+      stdout.write(ansiStyleCode(gFG))
     if gBG != 0:
-      stdout.write(getStyleStr(gBG))
+      stdout.write(ansiStyleCode(gBG))
 
 type
   ForegroundColor* = enum  ## terminal's foreground colors
@@ -557,8 +560,8 @@ proc setForegroundColor*(f: File, fg: ForegroundColor, bright=false) =
   when defined(windows):
     let h = conHandle(f)
     var old = getAttributes(h) and not FOREGROUND_RGB
-    if bright:
-      old = old or FOREGROUND_INTENSITY
+    old = if bright: old or FOREGROUND_INTENSITY
+          else:      old and not(FOREGROUND_INTENSITY)
     const lookup: array[ForegroundColor, int] = [
       0,
       (FOREGROUND_RED),
@@ -572,15 +575,15 @@ proc setForegroundColor*(f: File, fg: ForegroundColor, bright=false) =
   else:
     gFG = ord(fg)
     if bright: inc(gFG, 60)
-    f.write(getStyleStr(gFG))
+    f.write(ansiStyleCode(gFG))
 
 proc setBackgroundColor*(f: File, bg: BackgroundColor, bright=false) =
   ## Sets the terminal's background color.
   when defined(windows):
     let h = conHandle(f)
     var old = getAttributes(h) and not BACKGROUND_RGB
-    if bright:
-      old = old or BACKGROUND_INTENSITY
+    old = if bright: old or BACKGROUND_INTENSITY
+          else:      old and not(BACKGROUND_INTENSITY)
     const lookup: array[BackgroundColor, int] = [
       0,
       (BACKGROUND_RED),
@@ -594,10 +597,18 @@ proc setBackgroundColor*(f: File, bg: BackgroundColor, bright=false) =
   else:
     gBG = ord(bg)
     if bright: inc(gBG, 60)
-    f.write(getStyleStr(gBG))
+    f.write(ansiStyleCode(gBG))
 
+proc ansiForegroundColorCode*(fg: ForegroundColor, bright=false): string =
+  var style = ord(fg)
+  if bright: inc(style, 60)
+  return ansiStyleCode(style)
 
-proc getFGColorStr(color: Color): string =
+template ansiForegroundColorCode*(fg: static[ForegroundColor],
+                                  bright: static[bool] = false): string =
+  ansiStyleCode(fg.int + bright.int * 60)
+
+proc ansiForegroundColorCode*(color: Color): string =
   when hasThreadSupport:
     let rgb = extractRGB(color)
     result = fmt"{fgPrefix}{rgb.r};{rgb.g};{rgb.b}m"
@@ -609,7 +620,11 @@ proc getFGColorStr(color: Color): string =
       result = fmt"{fgPrefix}{rgb.r};{rgb.g};{rgb.b}m"
       colorsFGCache[color] = result
 
-proc getBGColorStr(color: Color): string =
+template ansiForegroundColorCode*(color: static[Color]): string =
+  const rgb = extractRGB(color)
+  (static(fmt"{fgPrefix}{rgb.r};{rgb.g};{rgb.b}m"))
+
+proc ansiBackgroundColorCode*(color: Color): string =
   when hasThreadSupport:
     let rgb = extractRGB(color)
     result = fmt"{bgPrefix}{rgb.r};{rgb.g};{rgb.b}m"
@@ -621,15 +636,19 @@ proc getBGColorStr(color: Color): string =
       result = fmt"{bgPrefix}{rgb.r};{rgb.g};{rgb.b}m"
       colorsFGCache[color] = result
 
+template ansiBackgroundColorCode*(color: static[Color]): string =
+  const rgb = extractRGB(color)
+  (static(fmt"{bgPrefix}{rgb.r};{rgb.g};{rgb.b}m"))
+
 proc setForegroundColor*(f: File, color: Color) =
   ## Sets the terminal's foreground true color.
   if trueColorIsEnabled:
-    f.write(getFGColorStr(color))
+    f.write(ansiForegroundColorCode(color))
 
 proc setBackgroundColor*(f: File, color: Color) =
   ## Sets the terminal's background true color.
   if trueColorIsEnabled:
-    f.write(getBGColorStr(color))
+    f.write(ansiBackgroundColorCode(color))
 
 proc setTrueColor(f: File, color: Color) =
   if fgSetColor:
@@ -727,10 +746,7 @@ proc getch*(): char =
       doAssert(readConsoleInput(fd, addr(keyEvent), 1, addr(numRead)) != 0)
       if numRead == 0 or keyEvent.eventType != 1 or keyEvent.bKeyDown == 0:
         continue
-      if keyEvent.uChar == 0:
-        return char(keyEvent.wVirtualKeyCode)
-      else:
-        return char(keyEvent.uChar)
+      return char(keyEvent.uChar)
   else:
     let fd = getFileHandle(stdin)
     var oldMode: Termios
@@ -738,6 +754,60 @@ proc getch*(): char =
     fd.setRaw()
     result = stdin.readChar()
     discard fd.tcsetattr(TCSADRAIN, addr oldMode)
+
+when defined(windows):
+  from unicode import toUTF8, Rune, runeLenAt
+
+  proc readPasswordFromStdin*(prompt: string, password: var TaintedString):
+                              bool {.tags: [ReadIOEffect, WriteIOEffect].} =
+    ## Reads a `password` from stdin without printing it. `password` must not
+    ## be ``nil``! Returns ``false`` if the end of the file has been reached,
+    ## ``true`` otherwise.
+    password.string.setLen(0)
+    stdout.write(prompt)
+    while true:
+      let c = getch()
+      case c.char
+      of '\r', chr(0xA):
+        break
+      of '\b':
+        # ensure we delete the whole UTF-8 character:
+        var i = 0
+        var x = 1
+        while i < password.len:
+          x = runeLenAt(password.string, i)
+          inc i, x
+        password.string.setLen(max(password.len - x, 0))
+      of chr(0x0):
+        # modifier key - ignore - for details see 
+        # https://github.com/nim-lang/Nim/issues/7764
+        continue
+      else:
+        password.string.add(toUTF8(c.Rune))
+    stdout.write "\n"
+
+else:
+  import termios
+
+  proc readPasswordFromStdin*(prompt: string, password: var TaintedString):
+                            bool {.tags: [ReadIOEffect, WriteIOEffect].} =
+    password.string.setLen(0)
+    let fd = stdin.getFileHandle()
+    var cur, old: Termios
+    discard fd.tcgetattr(cur.addr)
+    old = cur
+    cur.c_lflag = cur.c_lflag and not Cflag(ECHO)
+    discard fd.tcsetattr(TCSADRAIN, cur.addr)
+    stdout.write prompt
+    result = stdin.readLine(password)
+    stdout.write "\n"
+    discard fd.tcsetattr(TCSADRAIN, old.addr)
+
+proc readPasswordFromStdin*(prompt = "password: "): TaintedString =
+  ## Reads a password from stdin without printing it.
+  result = TaintedString("")
+  discard readPasswordFromStdin(prompt, result)
+
 
 # Wrappers assuming output to stdout:
 template hideCursor*() = hideCursor(stdout)

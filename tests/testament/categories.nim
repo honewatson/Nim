@@ -63,6 +63,26 @@ proc compileRodFiles(r: var TResults, cat: Category, options: string) =
   test "gtkex1", true
   test "gtkex2"
 
+# --------------------- flags tests -------------------------------------------
+
+proc flagTests(r: var TResults, cat: Category, options: string) =
+  # --genscript
+  const filename = "tests"/"flags"/"tgenscript"
+  const genopts = " --genscript"
+  let nimcache = nimcacheDir(filename, genopts, targetC)
+  testSpec r, makeTest(filename, genopts, cat)
+
+  when defined(windows):
+    testExec r, makeTest(filename, " cmd /c cd " & nimcache &
+                         " && compile_tgenscript.bat", cat)
+
+  when defined(linux):
+    testExec r, makeTest(filename, " sh -c \"cd " & nimcache &
+                         " && sh compile_tgenscript.sh\"", cat)
+
+  # Run
+  testExec r, makeTest(filename, " " & nimcache / "tgenscript", cat)
+
 # --------------------- DLL generation tests ----------------------------------
 
 proc safeCopyFile(src, dest: string) =
@@ -323,7 +343,7 @@ var nimbleDir = getEnv("NIMBLE_DIR").string
 if nimbleDir.len == 0: nimbleDir = getHomeDir() / ".nimble"
 let
   nimbleExe = findExe("nimble")
-  packageDir = nimbleDir / "pkgs"
+  #packageDir = nimbleDir / "pkgs" # not used
   packageIndex = nimbleDir / "packages.json"
 
 proc waitForExitEx(p: Process): int =
@@ -407,9 +427,9 @@ proc `&.?`(a, b: string): string =
   # candidate for the stdlib?
   result = if b.startswith(a): b else: a & b
 
-proc `&?.`(a, b: string): string =
+#proc `&?.`(a, b: string): string = # not used
   # candidate for the stdlib?
-  result = if a.endswith(b): a else: a & b
+  #result = if a.endswith(b): a else: a & b
 
 proc processSingleTest(r: var TResults, cat: Category, options, test: string) =
   let test = "tests" & DirSep &.? cat.string / test
@@ -421,13 +441,16 @@ proc processSingleTest(r: var TResults, cat: Category, options, test: string) =
 proc processCategory(r: var TResults, cat: Category, options: string) =
   case cat.string.normalize
   of "rodfiles":
-    when false: compileRodFiles(r, cat, options)
-    runRodFiles(r, cat, options)
+    when false:
+      compileRodFiles(r, cat, options)
+      runRodFiles(r, cat, options)
   of "js":
     # XXX JS doesn't need to be special anymore
     jsTests(r, cat, options)
   of "dll":
     dllTests(r, cat, options)
+  of "flags":
+    flagTests(r, cat, options)
   of "gc":
     gcTests(r, cat, options)
   of "longgc":

@@ -64,8 +64,11 @@
 ##     socket.acceptAddr(client, address)
 ##     echo("Client connected from: ", address)
 ##
+## **Note:** The ``client`` variable is initialised with ``new Socket`` **not**
+## ``newSocket()``. The difference is that the latter creates a new file
+## descriptor.
 
-{.deadCodeElim: on.}
+{.deadCodeElim: on.}  # dce option deprecated
 import nativesockets, os, strutils, parseutils, times, sets, options
 export Port, `$`, `==`
 export Domain, SockType, Protocol
@@ -107,9 +110,6 @@ when defineSsl:
       serverGetPskFunc: SslServerGetPskFunc
       clientGetPskFunc: SslClientGetPskFunc
 
-  {.deprecated: [ESSL: SSLError, TSSLCVerifyMode: SSLCVerifyMode,
-    TSSLProtVersion: SSLProtVersion, PSSLContext: SSLContext,
-    TSSLAcceptResult: SSLAcceptResult].}
 else:
   type
     SslContext* = void # TODO: Workaround #4797.
@@ -156,10 +156,6 @@ type
     Peek,
     SafeDisconn ## Ensures disconnection exceptions (ECONNRESET, EPIPE etc) are not thrown.
 
-{.deprecated: [TSocketFlags: SocketFlag, ETimeout: TimeoutError,
-    TReadLineResult: ReadLineResult, TSOBool: SOBool, PSocket: Socket,
-    TSocketImpl: SocketImpl].}
-
 type
   IpAddressFamily* {.pure.} = enum ## Describes the type of an IP address
     IPv6, ## IPv6 address
@@ -173,8 +169,6 @@ type
     of IpAddressFamily.IPv4:
       address_v4*: array[0..3, uint8] ## Contains the IP address in bytes in
                                       ## case of IPv4
-{.deprecated: [TIpAddress: IpAddress].}
-
 
 proc socketError*(socket: Socket, err: int = -1, async = false,
                   lastError = (-1).OSErrorCode): void {.gcsafe.}
@@ -221,7 +215,7 @@ proc newSocket*(domain, sockType, protocol: cint, buffered = true): Socket =
   ## Creates a new socket.
   ##
   ## If an error occurs EOS will be raised.
-  let fd = newNativeSocket(domain, sockType, protocol)
+  let fd = createNativeSocket(domain, sockType, protocol)
   if fd == osInvalidSocket:
     raiseOSError(osLastError())
   result = newSocket(fd, domain.Domain, sockType.SockType, protocol.Protocol,
@@ -232,7 +226,7 @@ proc newSocket*(domain: Domain = AF_INET, sockType: SockType = SOCK_STREAM,
   ## Creates a new socket.
   ##
   ## If an error occurs EOS will be raised.
-  let fd = newNativeSocket(domain, sockType, protocol)
+  let fd = createNativeSocket(domain, sockType, protocol)
   if fd == osInvalidSocket:
     raiseOSError(osLastError())
   result = newSocket(fd, domain, sockType, protocol, buffered)
@@ -411,6 +405,50 @@ proc isIpAddress*(address_str: string): bool {.tags: [].} =
     return false
   return true
 
+proc toSockAddr*(address: IpAddress, port: Port, sa: var Sockaddr_storage,
+                 sl: var Socklen) =
+  ## Converts `IpAddress` and `Port` to `SockAddr` and `Socklen`
+  let port = htons(uint16(port))
+  case address.family
+  of IpAddressFamily.IPv4:
+    sl = sizeof(Sockaddr_in).Socklen
+    let s = cast[ptr Sockaddr_in](addr sa)
+    s.sin_family = type(s.sin_family)(toInt(AF_INET))
+    s.sin_port = port
+    copyMem(addr s.sin_addr, unsafeAddr address.address_v4[0],
+            sizeof(s.sin_addr))
+  of IpAddressFamily.IPv6:
+    sl = sizeof(Sockaddr_in6).Socklen
+    let s = cast[ptr Sockaddr_in6](addr sa)
+    s.sin6_family = type(s.sin6_family)(toInt(AF_INET6))
+    s.sin6_port = port
+    copyMem(addr s.sin6_addr, unsafeAddr address.address_v6[0],
+            sizeof(s.sin6_addr))
+
+proc fromSockAddrAux(sa: ptr Sockaddr_storage, sl: Socklen,
+                     address: var IpAddress, port: var Port) =
+  if sa.ss_family.int == toInt(AF_INET) and sl == sizeof(Sockaddr_in).Socklen:
+    address = IpAddress(family: IpAddressFamily.IPv4)
+    let s = cast[ptr Sockaddr_in](sa)
+    copyMem(addr address.address_v4[0], addr s.sin_addr,
+            sizeof(address.address_v4))
+    port = ntohs(s.sin_port).Port
+  elif sa.ss_family.int == toInt(AF_INET6) and
+       sl == sizeof(Sockaddr_in6).Socklen:
+    address = IpAddress(family: IpAddressFamily.IPv6)
+    let s = cast[ptr Sockaddr_in6](sa)
+    copyMem(addr address.address_v6[0], addr s.sin6_addr,
+            sizeof(address.address_v6))
+    port = ntohs(s.sin6_port).Port
+  else:
+    raise newException(ValueError, "Neither IPv4 nor IPv6")
+
+proc fromSockAddr*(sa: Sockaddr_storage | SockAddr | Sockaddr_in | Sockaddr_in6,
+    sl: Socklen, address: var IpAddress, port: var Port) {.inline.} =
+  ## Converts `SockAddr` and `Socklen` to `IpAddress` and `Port`. Raises
+  ## `ObjectConversionError` in case of invalid `sa` and `sl` arguments.
+  fromSockAddrAux(cast[ptr Sockaddr_storage](unsafeAddr sa), sl, address, port)
+
 when defineSsl:
   CRYPTO_malloc_init()
   doAssert SslLibraryInit() == 1
@@ -427,8 +465,14 @@ when defineSsl:
       raise newException(SSLError, "No error reported.")
     if err == -1:
       raiseOSError(osLastError())
-    var errStr = ErrErrorString(err, nil)
-    raise newException(SSLError, $errStr)
+    var errStr = $ErrErrorString(err, nil)
+    case err
+    of 336032814, 336032784:
+      errStr = "Please upgrade your OpenSSL library, it does not support the " &
+               "necessary protocols. OpenSSL error is: " & errStr
+    else:
+      discard
+    raise newException(SSLError, errStr)
 
   proc getExtraData*(ctx: SSLContext, index: int): RootRef =
     ## Retrieves arbitrary data stored inside SSLContext.
@@ -753,10 +797,10 @@ proc acceptAddr*(server: Socket, client: var Socket, address: var string,
   ## flag is specified then this error will not be raised and instead
   ## accept will be called again.
   assert(client != nil)
-  var sockAddress: Sockaddr_in
-  var addrLen = sizeof(sockAddress).SockLen
-  var sock = accept(server.fd, cast[ptr SockAddr](addr(sockAddress)),
-                    addr(addrLen))
+  assert client.fd.int <= 0, "Client socket needs to be initialised with " &
+                             "`new`, not `newSocket`."
+  let ret = accept(server.fd)
+  let sock = ret[0]
 
   if sock == osInvalidSocket:
     let err = osLastError()
@@ -764,7 +808,9 @@ proc acceptAddr*(server: Socket, client: var Socket, address: var string,
       acceptAddr(server, client, address, flags)
     raiseOSError(err)
   else:
+    address = ret[1]
     client.fd = sock
+    client.domain = getSockDomain(sock)
     client.isBuffered = server.isBuffered
 
     # Handle SSL.
@@ -775,9 +821,6 @@ proc acceptAddr*(server: Socket, client: var Socket, address: var string,
         server.sslContext.wrapSocket(client)
         let ret = SSLAccept(client.sslHandle)
         socketError(client, ret, false)
-
-    # Client socket is set above.
-    address = $inet_ntoa(sockAddress.sin_addr)
 
 when false: #defineSsl:
   proc acceptAddrSSL*(server: Socket, client: var Socket,
@@ -925,7 +968,7 @@ when defined(posix) and not defined(nimdoc):
       raise newException(ValueError, "socket path too long")
     copyMem(addr result.sun_path, path.cstring, path.len + 1)
 
-when defined(posix):
+when defined(posix) or defined(nimdoc):
   proc connectUnix*(socket: Socket, path: string) =
     ## Connects to Unix socket on `path`.
     ## This only works on Unix-style systems: Mac OS X, BSD and Linux
@@ -1113,7 +1156,7 @@ proc waitFor(socket: Socket, waited: var float, timeout, size: int,
           return 1
         let sslPending = SSLPending(socket.sslHandle)
         if sslPending != 0:
-          return sslPending
+          return min(sslPending, size)
 
     var startTime = epochTime()
     let selRet = select(socket, timeout - int(waited * 1000.0))
@@ -1377,8 +1420,7 @@ proc sendTo*(socket: Socket, address: string, port: Port, data: pointer,
   ##
   ## **Note:** This proc is not available for SSL sockets.
   assert(not socket.isClosed, "Cannot `sendTo` on a closed socket")
-  var aiList = getAddrInfo(address, port, af)
-
+  var aiList = getAddrInfo(address, port, af, socket.sockType, socket.protocol)
   # try all possibilities:
   var success = false
   var it = aiList
@@ -1399,7 +1441,7 @@ proc sendTo*(socket: Socket, address: string, port: Port,
   ## this function will try each IP of that hostname.
   ##
   ## This is the high-level version of the above ``sendTo`` function.
-  result = socket.sendTo(address, port, cstring(data), data.len)
+  result = socket.sendTo(address, port, cstring(data), data.len, socket.domain )
 
 
 proc isSsl*(socket: Socket): bool =
@@ -1548,7 +1590,7 @@ proc dial*(address: string, port: Port,
     domain = domainOpt.unsafeGet()
     lastFd = fdPerDomain[ord(domain)]
     if lastFd == osInvalidSocket:
-      lastFd = newNativeSocket(domain, sockType, protocol)
+      lastFd = createNativeSocket(domain, sockType, protocol)
       if lastFd == osInvalidSocket:
         # we always raise if socket creation failed, because it means a
         # network system problem (e.g. not enough FDs), and not an unreachable
@@ -1657,6 +1699,9 @@ proc connect*(socket: Socket, address: string, port = Port(0),
   if selectWrite(s, timeout) != 1:
     raise newException(TimeoutError, "Call to 'connect' timed out.")
   else:
+    let res = getSockOptInt(socket.fd, SOL_SOCKET, SO_ERROR)
+    if res != 0:
+      raiseOSError(OSErrorCode(res))
     when defineSsl and not defined(nimdoc):
       if socket.isSSL:
         socket.fd.setBlocking(true)

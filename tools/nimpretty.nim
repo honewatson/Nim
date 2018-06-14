@@ -12,7 +12,7 @@
 when not defined(nimpretty):
   {.error: "This needs to be compiled with --define:nimPretty".}
 
-import ../compiler / [idents, msgs, ast, syntaxes, renderer]
+import ../compiler / [idents, msgs, ast, syntaxes, renderer, options]
 
 import parseopt, strutils, os
 
@@ -24,7 +24,7 @@ const
 Usage:
   nimpretty [options] file.nim
 Options:
-  --backup:ON|OFF     create a backup file before overwritting (default: ON)
+  --backup:on|off     create a backup file before overwritting (default: ON)
   --version           show the version
   --help              show this help
 """
@@ -40,10 +40,11 @@ proc writeVersion() =
   quit(0)
 
 proc prettyPrint(infile: string) =
-  let fileIdx = fileInfoIdx(infile)
-  let tree = parseFile(fileIdx, newIdentCache())
+  let conf = newConfigRef()
+  let fileIdx = fileInfoIdx(conf, infile)
+  let tree = parseFile(fileIdx, newIdentCache(), conf)
   let outfile = changeFileExt(infile, ".pretty.nim")
-  renderModule(tree, infile, outfile, {})
+  renderModule(tree, infile, outfile, {}, fileIdx)
 
 proc main =
   var infile: string

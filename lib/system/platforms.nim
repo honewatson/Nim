@@ -7,7 +7,7 @@
 #    distribution, for details about the copyright.
 #
 
-## Platform detection for Nim. This module is included by the system module!
+## Platform detection for NimScript. This module is included by the system module!
 ## Do not import it directly!
 
 type
@@ -29,8 +29,9 @@ type
     arm,                       ## ARM based processor
     arm64,                     ## ARM64 based processor
     vm,                        ## Some Virtual machine: Nim's VM or JavaScript
-    avr                        ## AVR based processor
-    msp430                     ## TI MSP430 microcontroller
+    avr,                       ## AVR based processor
+    msp430,                    ## TI MSP430 microcontroller
+    riscv64                    ## RISC-V 64-bit processor
 
   OsPlatform* {.pure.} = enum ## the OS this program will run on.
     none, dos, windows, os2, linux, morphos, skyos, solaris,
@@ -61,7 +62,7 @@ const
               elif defined(haiku): OsPlatform.haiku
               elif defined(android): OsPlatform.android
               elif defined(js): OsPlatform.js
-              elif defined(nimrodVM): OsPlatform.nimVM
+              elif defined(nimVM): OsPlatform.nimVM
               elif defined(standalone): OsPlatform.standalone
               else: OsPlatform.none
     ## the OS this program will run on.
@@ -84,5 +85,6 @@ const
                elif defined(vm): CpuPlatform.vm
                elif defined(avr): CpuPlatform.avr
                elif defined(msp430): CpuPlatform.msp430
+               elif defined(riscv64): CpuPlatform.riscv64
                else: CpuPlatform.none
     ## the CPU this program will run on.

@@ -134,15 +134,20 @@ type
     protocol: Protocol
   AsyncSocket* = ref AsyncSocketDesc
 
-{.deprecated: [PAsyncSocket: AsyncSocket].}
-
 proc newAsyncSocket*(fd: AsyncFD, domain: Domain = AF_INET,
     sockType: SockType = SOCK_STREAM,
     protocol: Protocol = IPPROTO_TCP, buffered = true): AsyncSocket =
   ## Creates a new ``AsyncSocket`` based on the supplied params.
+  ##
+  ## The supplied ``fd``'s non-blocking state will be enabled implicitly.
+  ##
+  ## **Note**: This procedure will **NOT** register ``fd`` with the global
+  ## async dispatcher. You need to do this manually. If you have used
+  ## ``newAsyncNativeSocket`` to create ``fd`` then it's already registered.
   assert fd != osInvalidSocket.AsyncFD
   new(result)
   result.fd = fd.SocketHandle
+  fd.SocketHandle.setBlocking(false)
   result.isBuffered = buffered
   result.domain = domain
   result.sockType = sockType
@@ -156,8 +161,10 @@ proc newAsyncSocket*(domain: Domain = AF_INET, sockType: SockType = SOCK_STREAM,
   ##
   ## This procedure will also create a brand new file descriptor for
   ## this socket.
-  result = newAsyncSocket(newAsyncNativeSocket(domain, sockType, protocol),
-                          domain, sockType, protocol, buffered)
+  let fd = createAsyncNativeSocket(domain, sockType, protocol)
+  if fd.SocketHandle == osInvalidSocket:
+    raiseOSError(osLastError())
+  result = newAsyncSocket(fd, domain, sockType, protocol, buffered)
 
 proc newAsyncSocket*(domain, sockType, protocol: cint,
     buffered = true): AsyncSocket =
@@ -165,8 +172,10 @@ proc newAsyncSocket*(domain, sockType, protocol: cint,
   ##
   ## This procedure will also create a brand new file descriptor for
   ## this socket.
-  result = newAsyncSocket(newAsyncNativeSocket(domain, sockType, protocol),
-                          Domain(domain), SockType(sockType),
+  let fd = createAsyncNativeSocket(domain, sockType, protocol)
+  if fd.SocketHandle == osInvalidSocket:
+    raiseOSError(osLastError())
+  result = newAsyncSocket(fd, Domain(domain), SockType(sockType),
                           Protocol(protocol), buffered)
 
 when defineSsl:
@@ -190,7 +199,7 @@ when defineSsl:
       flags: set[SocketFlag]) {.async.} =
     let len = bioCtrlPending(socket.bioOut)
     if len > 0:
-      var data = newStringOfCap(len)
+      var data = newString(len)
       let read = bioRead(socket.bioOut, addr data[0], len)
       assert read != 0
       if read < 0:
